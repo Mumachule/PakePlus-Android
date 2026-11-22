@@ -2,25 +2,65 @@ window.addEventListener("DOMContentLoaded",()=>{const t=document.createElement("
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>植物大战僵尸 · 50波极限生存</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a2418">
+<title>植物大战僵尸 · 50波极限生存（手机版）</title>
 <style>
   html, body {
-    margin: 0; padding: 0; height: 100%; 
+    margin: 0; padding: 0;
+    height: 100%; height: 100dvh;
     background: #1a2418;
     display: flex; align-items: center; justify-content: center;
     font-family: "Microsoft YaHei", system-ui, sans-serif;
     overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
   }
   canvas {
-    max-width: 100vw; max-height: 100vh;
+    max-width: 100vw; max-height: 100vh; max-height: 100dvh;
+    width: auto; height: auto;
     border-radius: 12px; box-shadow: 0 20px 60px #000a;
     cursor: pointer;
     object-fit: contain;
+    display: block;
+    touch-action: none;
   }
+  #rotateHint {
+    position: fixed; inset: 0; z-index: 30;
+    display: none; flex-direction: column;
+    align-items: center; justify-content: center; gap: 14px;
+    background: rgba(16, 26, 14, 0.95); color: #e8dcc0;
+    font-size: 20px; text-align: center; padding: 24px;
+    touch-action: none;
+  }
+  #rotateHint .phone {
+    width: 54px; height: 90px; border: 3px solid #e8dcc0; border-radius: 10px;
+    animation: tilt 1.8s ease-in-out infinite;
+  }
+  @keyframes tilt { 0%, 100% { transform: rotate(0); } 50% { transform: rotate(90deg); } }
+  @media (orientation: portrait) and (max-width: 900px) {
+    #rotateHint { display: flex; }
+  }
+  #fsBtn {
+    position: fixed; left: calc(10px + env(safe-area-inset-left));
+    bottom: calc(10px + env(safe-area-inset-bottom));
+    z-index: 20; width: 48px; height: 40px; border-radius: 10px;
+    border: 1px solid #6b5136; background: #241a0ecc; color: #e8dcc0;
+    font-size: 14px; line-height: 1; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #fsBtn:active { background: #5a4126; }
 </style>
 </head>
 <body>
 <canvas id="cv" width="1600" height="932"></canvas>
+<div id="rotateHint"><div class="phone"></div><div>请横屏游玩</div><div style="font-size:14px;color:#a08c6c">横屏后画面更大、更好操作</div></div>
+<button id="fsBtn" aria-label="全屏">全屏</button>
 <script>
 const cv  = document.getElementById('cv');
 const ctx = cv.getContext('2d');
@@ -136,9 +176,90 @@ let screenShake = 0;
 let endTimer = 0;
 const mouse = {x:-1, y:-1};
 
+/* ================= 历史战绩（本地存档） ================= */
+const RECORDS_KEY = 'pvz_god_records_v1';
+const RECORD_BTN = { x: 1462, y: 887, w: 122, h: 34 };
+let runHistory = [];
+let showHistory = false;
+let mobilePaused = false;
+let runSaved = false;
+
+function loadRunHistory(){
+  try {
+    const raw = localStorage.getItem(RECORDS_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    runHistory = Array.isArray(arr)
+      ? arr.filter(r => r && typeof r === 'object').slice(0, 50)
+      : [];
+  } catch (e) {
+    runHistory = [];
+  }
+}
+
+function persistRunHistory(){
+  try {
+    localStorage.setItem(RECORDS_KEY, JSON.stringify(runHistory.slice(0, 50)));
+  } catch (e) { /* 无痕模式 / file:// 限制时仅保留本次会话记录 */ }
+}
+
+function saveRunRecord(result){
+  if (runSaved) return;
+  runSaved = true;
+  const rec = {
+    result: result === 'win' ? 'win' : 'lose',
+    time: Math.max(0, Math.round(gameTime)),
+    kills: Math.max(0, killed | 0),
+    wave: Math.max(0, wave | 0),
+    date: Date.now(),
+  };
+  runHistory.unshift(rec);
+  if (runHistory.length > 50) runHistory.length = 50;
+  persistRunHistory();
+}
+
+function fmtDuration(sec){
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m + '分' + (s < 10 ? '0' : '') + s + '秒';
+}
+
+function fmtRecordDate(ts){
+  const d = new Date(ts);
+  const p = n => (n < 10 ? '0' : '') + n;
+  return (d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function getHistoryBest(){
+  let bestTime = null, bestKills = 0, bestWave = 0;
+  for (const r of runHistory){
+    if (r.result === 'win' && (bestTime === null || r.time < bestTime)) bestTime = r.time;
+    if (r.kills > bestKills) bestKills = r.kills;
+    if (r.wave > bestWave) bestWave = r.wave;
+  }
+  return { bestTime, bestKills, bestWave };
+}
+
+function inRecordButton(x, y){
+  return x >= RECORD_BTN.x && x <= RECORD_BTN.x + RECORD_BTN.w &&
+         y >= RECORD_BTN.y && y <= RECORD_BTN.y + RECORD_BTN.h;
+}
+
+loadRunHistory();
+
+function isPortraitPhone(){
+  return window.innerHeight > window.innerWidth && window.innerWidth < 900;
+}
+function syncMobilePause(){
+  mobilePaused = isPortraitPhone();
+}
+window.addEventListener('resize', syncMobilePause);
+window.addEventListener('orientationchange', () => setTimeout(syncMobilePause, 200));
+syncMobilePause();
+
 function reset(){
   plants = []; zombies = []; bullets = []; suns = []; particles = [];
-  sun = 100;
+  sun = 150;
   selected = null;
   cardCD = {};
   PLANT_ORDER.forEach(k => cardCD[k] = 0);
@@ -148,6 +269,8 @@ function reset(){
   killed = 0;
   screenShake = 0;
   endTimer = 0;
+  runSaved = false;
+  showHistory = false;
 
   wave = 0;
   waveTimer = 0; 
@@ -1264,8 +1387,8 @@ function update(dt){
             x: z.x - 20,
             flyStartX: z.x - 20,
             flyEndX: Math.max(GRASS_X - 10, z.x - 3 * CW - (k * 20)),
-            hp: 500,
-            maxHp: 500,
+            hp: 300,
+            maxHp: 300,
             speed: (CW / 4) * 2.5,
             type: 'imp',
             isFlying: true,
@@ -1651,7 +1774,7 @@ function drawTopBar(){
   ctx.beginPath(); ctx.arc(65, 50, 24, 0, Math.PI * 2); ctx.fill();
   ctx.restore();
   ctx.fillStyle = '#3a2a12';
-  ctx.font = 'bold 32px sans-serif';
+  ctx.font = 'bold 40px sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(sun, 65, 108);
@@ -1705,12 +1828,12 @@ function drawTopBar(){
     ctx.restore();
 
     ctx.fillStyle = '#2b2118';
-    ctx.font = '16px sans-serif';
+    ctx.font = '21px sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText(def.name, x + w / 2, y + h - 24);
 
     ctx.fillStyle = afford ? '#1b5e20' : '#b71c1c';
-    ctx.font = 'bold 18px sans-serif';
+    ctx.font = 'bold 23px sans-serif';
     ctx.fillText(def.cost, x + w / 2, y + h - 8);
 
     if (!ready){
@@ -1718,7 +1841,7 @@ function drawTopBar(){
       ctx.fillRect(x, y, w, h * (cardCD[key] / def.cd));
       
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 24px sans-serif';
+      ctx.font = 'bold 27px sans-serif';
       ctx.fillText(Math.ceil(cardCD[key]), x + w / 2, y + h / 2);
     } else if (!afford){
       ctx.fillStyle = 'rgba(15,20,35,.45)';
@@ -1901,31 +2024,123 @@ function drawOverlay(){
   ctx.fillRect(0, 0, W, H);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
+
+  const best = getHistoryBest();
+  const bestText = best.bestTime !== null
+    ? `最快通关 ${fmtDuration(best.bestTime)} · 最多击杀 ${best.bestKills} · 最高第 ${best.bestWave} 波`
+    : `暂无通关记录 · 最多击杀 ${best.bestKills} · 最高第 ${best.bestWave} 波`;
+
   if (gameState === 'win'){
     ctx.fillStyle = '#9ee34a';
     ctx.font = 'bold 64px "Microsoft YaHei", sans-serif';
-    ctx.fillText('关卡胜利！', W / 2, H / 2 - 50);
+    ctx.fillText('关卡胜利！', W / 2, H / 2 - 70);
     ctx.fillStyle = '#e8e8e8';
-    ctx.font = '26px "Microsoft YaHei", sans-serif';
-    ctx.fillText(`用时 ${Math.floor(gameTime)} 秒 · 击败 ${killed} 只僵尸`, W / 2, H / 2 + 20);
+    ctx.font = '31px "Microsoft YaHei", sans-serif';
+    ctx.fillText(`通关用时 ${fmtDuration(gameTime)} · 击败 ${killed} 只僵尸`, W / 2, H / 2 + 5);
   } else {
     ctx.fillStyle = '#ff6b6b';
     ctx.font = 'bold 62px "Microsoft YaHei", sans-serif';
-    ctx.fillText('僵尸吃掉了你的脑子！', W / 2, H / 2 - 50);
+    ctx.fillText('僵尸吃掉了你的脑子！', W / 2, H / 2 - 70);
     ctx.fillStyle = '#e8e8e8';
-    ctx.font = '26px "Microsoft YaHei", sans-serif';
-    ctx.fillText(`到达第 ${wave} 波，击败了 ${killed} 只僵尸`, W / 2, H / 2 + 20);
+    ctx.font = '31px "Microsoft YaHei", sans-serif';
+    ctx.fillText(`存活 ${fmtDuration(gameTime)} · 到达第 ${wave} 波 · 击败 ${killed} 只僵尸`, W / 2, H / 2 + 5);
   }
-  
+
+  ctx.fillStyle = '#ffd633';
+  ctx.font = '26px "Microsoft YaHei", sans-serif';
+  ctx.fillText(`历史最佳：${bestText}`, W / 2, H / 2 + 58);
+
   if (endTimer > 0) {
     ctx.fillStyle = '#aaaaaa';
-    ctx.font = 'bold 28px "Microsoft YaHei", sans-serif';
-    ctx.fillText(`点击任意位置重新开始 (${Math.ceil(endTimer)})`, W / 2, H / 2 + 95);
+    ctx.font = 'bold 30px "Microsoft YaHei", sans-serif';
+    ctx.fillText(`点击任意位置重新开始 (${Math.ceil(endTimer)})`, W / 2, H / 2 + 130);
   } else {
     ctx.fillStyle = '#ffd633';
-    ctx.font = 'bold 28px "Microsoft YaHei", sans-serif';
-    ctx.fillText('点击任意位置重新开始', W / 2, H / 2 + 95);
+    ctx.font = 'bold 30px "Microsoft YaHei", sans-serif';
+    ctx.fillText('点击任意位置重新开始', W / 2, H / 2 + 130);
   }
+}
+
+function drawRecordButton(){
+  const b = RECORD_BTN;
+  const hover = mouse.x >= b.x && mouse.x <= b.x + b.w && mouse.y >= b.y && mouse.y <= b.y + b.h;
+  ctx.save();
+  ctx.fillStyle = showHistory ? '#5a4126' : (hover ? '#3d2c1a' : '#241a0e');
+  roundRect(b.x, b.y, b.w, b.h, 9); ctx.fill();
+  ctx.strokeStyle = showHistory ? '#ffd633' : '#6b5136';
+  ctx.lineWidth = 2;
+  roundRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2, 8); ctx.stroke();
+  ctx.fillStyle = '#e8dcc0';
+  ctx.font = 'bold 21px "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('战绩记录', b.x + b.w / 2, b.y + b.h / 2 + 1);
+  ctx.restore();
+}
+
+function drawHistoryPanel(){
+  ctx.save();
+  ctx.fillStyle = 'rgba(8,12,6,.88)';
+  ctx.fillRect(0, 0, W, H);
+
+  const x = W / 2 - 430, y = H / 2 - 290, w = 860, h = 580;
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  g.addColorStop(0, '#332414'); g.addColorStop(1, '#160e06');
+  ctx.fillStyle = g;
+  roundRect(x, y, w, h, 18); ctx.fill();
+  ctx.strokeStyle = '#6b5136'; ctx.lineWidth = 3;
+  roundRect(x + 2, y + 2, w - 4, h - 4, 16); ctx.stroke();
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#ffd633';
+  ctx.font = 'bold 42px "Microsoft YaHei", sans-serif';
+  ctx.fillText('历史战绩', x + w / 2, y + 50);
+  ctx.fillStyle = '#b8a888';
+  ctx.font = '21px "Microsoft YaHei", sans-serif';
+  ctx.fillText('本地存档 · 最近 50 局', x + w / 2, y + 86);
+
+  const cols = [x + 70, x + 210, x + 350, x + 500, x + 665];
+  const heads = ['结果', '波数', '击杀', '用时', '时间'];
+  ctx.font = 'bold 21px "Microsoft YaHei", sans-serif';
+  ctx.fillStyle = '#cbb894';
+  heads.forEach((t, i) => ctx.fillText(t, cols[i], y + 126));
+
+  const list = runHistory.slice(0, 9);
+  if (list.length === 0){
+    ctx.fillStyle = '#a08c6c';
+    ctx.font = '26px "Microsoft YaHei", sans-serif';
+    ctx.fillText('还没有战绩，先打一局吧', x + w / 2, y + 250);
+  } else {
+    list.forEach((r, i) => {
+      const ry = y + 160 + i * 36;
+      if (i % 2 === 0){
+        ctx.fillStyle = 'rgba(255,255,255,.05)';
+        roundRect(x + 34, ry - 16, w - 68, 32, 8); ctx.fill();
+      }
+      ctx.font = 'bold 23px "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = r.result === 'win' ? '#8ce87a' : '#ff8080';
+      ctx.fillText(r.result === 'win' ? '胜利' : '失败', cols[0], ry);
+      ctx.font = '22px "Microsoft YaHei", sans-serif';
+      ctx.fillStyle = '#e8e0d0';
+      ctx.fillText('第 ' + r.wave + ' 波', cols[1], ry);
+      ctx.fillText(String(r.kills), cols[2], ry);
+      ctx.fillText(fmtDuration(r.time), cols[3], ry);
+      ctx.fillStyle = '#aa9978';
+      ctx.fillText(fmtRecordDate(r.date), cols[4], ry);
+    });
+  }
+
+  const best = getHistoryBest();
+  ctx.fillStyle = '#ffd633';
+  ctx.font = 'bold 24px "Microsoft YaHei", sans-serif';
+  const bestText = best.bestTime !== null
+    ? `最佳：最快通关 ${fmtDuration(best.bestTime)} · 最多击杀 ${best.bestKills} · 最高第 ${best.bestWave} 波`
+    : `最佳：暂无通关记录 · 最多击杀 ${best.bestKills} · 最高第 ${best.bestWave} 波`;
+  ctx.fillText(bestText, x + w / 2, y + h - 74);
+
+  ctx.fillStyle = '#a08c6c';
+  ctx.font = '21px "Microsoft YaHei", sans-serif';
+  ctx.fillText('点击任意位置关闭', x + w / 2, y + h - 34);
+  ctx.restore();
 }
 
 function draw(){
@@ -2014,6 +2229,10 @@ function draw(){
   drawOverlay();
   
   ctx.restore();
+
+  // UI 按钮和面板放在主画面之后，避免被屏幕震动影响
+  drawRecordButton();
+  if (showHistory) drawHistoryPanel();
 }
 
 function canvasPos(e){
@@ -2031,12 +2250,23 @@ cv.addEventListener('mousemove', e => {
 cv.addEventListener('mouseleave', () => { mouse.x = -1; mouse.y = -1; });
 cv.addEventListener('contextmenu', e => { e.preventDefault(); selected = null; });
 
-cv.addEventListener('click', e => {
+window.addEventListener('keydown', e => {
+  if (e.key === 'Escape') showHistory = false;
+  else if (e.key === 'h' || e.key === 'H') showHistory = !showHistory;
+});
+
+cv.addEventListener('pointerdown', e => {
+  if (e.isPrimary === false) return;
+  if (e.button !== undefined && e.button !== 0) return;
+  e.preventDefault();
   initAudio(); 
 
-  if (gameState !== 'playing' && endTimer > 0) return; 
-
   const {x: mx, y: my} = canvasPos(e);
+
+  if (showHistory){ showHistory = false; return; }
+  if (inRecordButton(mx, my)){ selected = null; showHistory = true; return; }
+
+  if (gameState !== 'playing' && endTimer > 0) return; 
 
   if (gameState !== 'playing'){ reset(); return; }
 
@@ -2140,11 +2370,36 @@ cv.addEventListener('click', e => {
 });
 
 
+/* ================= 手机版：全屏 & 手势 ================= */
+const fsBtn = document.getElementById('fsBtn');
+if (fsBtn){
+  fsBtn.addEventListener('click', async e => {
+    e.stopPropagation();
+    try {
+      if (!document.fullscreenElement){
+        await document.documentElement.requestFullscreen();
+        if (screen.orientation && screen.orientation.lock) await screen.orientation.lock('landscape');
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (err) {}
+  });
+}
+document.addEventListener('touchmove', e => { e.preventDefault(); }, { passive: false });
+
 /* ================= 主循环 ================= */
 let lastT = performance.now();
 function loop(now){
   const dt = Math.min((now - lastT) / 1000, 0.05);
   lastT = now;
+
+  // 查看战绩时暂停游戏与计时
+  if (showHistory || mobilePaused){
+    draw();
+    requestAnimationFrame(loop);
+    return;
+  }
+
   gameTime += dt;
   
   // 修复：区分 playing 与其他状态，确保倒计时正常
@@ -2152,6 +2407,10 @@ function loop(now){
     update(dt);
   } else if (endTimer > 0) {
     endTimer -= dt;
+  }
+
+  if (gameState !== 'playing' && !runSaved){
+    saveRunRecord(gameState === 'win' ? 'win' : 'lose');
   }
 
   draw();
